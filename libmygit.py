@@ -10,13 +10,13 @@ import zlib
 
 
 class GitRepository(object):
-    """A git repository"""
 
     worktree = None
     gitdir = None
     conf = None
 
     """force is optional for checking"""
+
     def __init__(self, path, force=False):
         self.worktree = path
         self.gitdir = os.path.join(path, ".git")
@@ -37,6 +37,43 @@ class GitRepository(object):
             vers = int(self.conf.get("core", "repositoryformatversion"))
             if vers != 0:
                 raise Exception("Unsupported repositoryformatversion %s" % vers)
+
+
+class GitObject(object):
+    repo = None
+
+    def __init__(self, repo, data=None):
+        self.repo = repo
+        if data != None:
+            self.deserialize(data)
+
+    def serialize(self):
+        raise Exception("Unimplemented!")
+
+    def deserialize(self):
+        raise Exception("Unimplemented!")
+
+
+class GitCommit(GitObject):
+    pass
+
+
+class GitTree(GitObject):
+    pass
+
+
+class GitTag(GitObject):
+    pass
+
+
+class GitBlob(GitObject):
+    fmt = b'blob'
+
+    def serialize(self):
+        return self.blobdata
+
+    def deserialize(self, data):
+        self.blobdata = data
 
 
 def repo_path(repo, *path):
@@ -140,12 +177,70 @@ def repo_find(path=".", required=True):
     return repo_find(parent, required)
 
 
+def object_read(repo, sha):
+    path = repo_file(repo, "objects", sha[0:2], sha[2:])
+
+    with open(path, "rb") as f:
+        raw = zlib.compress(f.read())
+
+    # read the type (till meet the space)
+    x = raw.find(b' ')
+    fmt = raw[0:x]
+
+    # read the size
+    y = raw.find(b'\x00', x)
+    size = int(raw[x:y].decode("ascii"))
+    if size != len(raw) - y - 1:
+        raise Exception("Malformed object {0}: bad length!".format(sha))
+
+    # choose the constructor
+    if fmt == b'commit':
+        c = GitCommit
+    elif fmt == b'tree':
+        c = GitTree
+    elif fmt == b'tag':
+        c = GitTag
+    elif fmt == b'blob':
+        c = GitBlob
+    else:
+        raise Exception("Unknown type {0} for object{1}".format(fmt.decode("ascii"), sha))
+
+    # call the constructor
+    return c(repo, raw[y + 1:])
+
+
+def object_write(obj, actually_write=True):
+    data = obj.serialize()
+    # add header
+    result = obj.fmt + b' ' + str(len(data)).encode() + b'\x00'
+    # compute hash
+    sha = hashlib.sha1(result).hexdigest()
+
+    if actually_write:
+        # compute the path (2 + ..)
+        path = repo_file(obj.repo, "objects", sha[0:2], sha[2:])
+        with open(path, "wb") as f:
+            f.write(zlib.compress(result))
+
+    return sha
+
+
+def object_find(repo, name, fmt=None, follow=True):
+    return name
+
+
+def cat_file(repo, obj, fmt=None):
+    obj = object_read(repo, object_find(repo, obj, fmt=fmt))
+    sys.stdout.buffer.write(obj.serialize())
+
+
 def cmd_add(args):
     pass
 
 
 def cmd_cat_file(args):
-    pass
+    repo = repo_find()
+    cat_file(repo, args.object, fmt=args.type.encode())
 
 
 def cmd_checkout(args):
@@ -162,7 +257,6 @@ def cmd_hash_object(args):
 
 def cmd_init(args):
     repo_create(args.path)
-    pass
 
 
 def cmd_log(args):
@@ -213,6 +307,15 @@ argsp.add_argument("path",
                    nargs="?",
                    default=".",
                    help="Where to create the repository.")
+
+argsp = argsubparsers.add_parser("cat-file", help="Provide the concept of repository objects")
+argsp.add_argument("type",
+                   metavar="type",
+                   choices=["blob", "commit", "tag", "tree"],
+                   help="Specify the type")
+argsp.add_argument("object",
+                   metavar="object",
+                   help="The object to display")
 
 
 def main(argv=sys.argv[1:]):
