@@ -10,7 +10,6 @@ import zlib
 
 
 class GitRepository(object):
-
     worktree = None
     gitdir = None
     conf = None
@@ -225,6 +224,25 @@ def object_write(obj, actually_write=True):
     return sha
 
 
+def object_hash(fd, fmt, repo=None):
+    data = fd.read()
+
+    # Choose constructor depending on
+    # object type found in header.
+    if fmt == b'commit':
+        obj = GitCommit(repo, data)
+    elif fmt == b'tree':
+        obj = GitTree(repo, data)
+    elif fmt == b'tag':
+        obj = GitTag(repo, data)
+    elif fmt == b'blob':
+        obj = GitBlob(repo, data)
+    else:
+        raise Exception("Unknown type %s!" % fmt)
+
+    return object_write(obj, repo)
+
+
 def object_find(repo, name, fmt=None, follow=True):
     return name
 
@@ -252,7 +270,14 @@ def cmd_commit(args):
 
 
 def cmd_hash_object(args):
-    pass
+    if args.write:
+        repo = GitRepository(".")
+    else:
+        repo = None
+
+    with open(args.path, "rb") as fd:
+        sha = object_hash(fd, args.type.encode(), repo)
+        print(sha)
 
 
 def cmd_init(args):
@@ -316,6 +341,20 @@ argsp.add_argument("type",
 argsp.add_argument("object",
                    metavar="object",
                    help="The object to display")
+
+argsp = argsubparsers.add_parser("hash-object", help="Compute object ID and optionally creates a blob from a file")
+argsp.add_argument("-t",
+                   metavar="type",
+                   dest="type",
+                   choices=['blob', 'commit', 'tag', 'tree'],
+                   default='blob',
+                   help="Specify the type")
+argsp.add_argument("-w",
+                   dest="write",
+                   action="store_true",
+                   help="Actually write the object into the database")
+argsp.add_argument("path",
+                   help="Read the object from <file>")
 
 
 def main(argv=sys.argv[1:]):
